@@ -44,13 +44,26 @@ jobs:
         run: |
           set -e
           [ -n "$TG_API_ID" ] && [ -n "$TG_API_HASH" ] || { echo "Нет секретов TG_API_ID / TG_API_HASH"; exit 1; }
-          B=TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
-          sed -i -E "s/(int APP_ID = )[0-9]+;/\1${TG_API_ID};/; s/(String APP_HASH = \")[0-9a-fA-F]+\";/\1${TG_API_HASH}\";/" "$B"
-          grep -q "APP_ID = ${TG_API_ID};" "$B" || { echo "Не нашёл APP_ID в BuildVars.java"; exit 1; }
-          grep -q "APP_HASH = \"${TG_API_HASH}\";" "$B" || { echo "Не нашёл APP_HASH в BuildVars.java"; exit 1; }
+          
+          # Ищем файл BuildVars.java
+          B=$(find . -name "BuildVars.java" | head -n 1)
+          [ -z "$B" ] && { echo "Не найден BuildVars.java"; exit 1; }
+          
+          # Меняем ключи через Python (он надежнее, чем sed)
+          python3 -c "
+          import re, os
+          p = '$B'
+          with open(p, 'r', encoding='utf-8') as f: c = f.read()
+          c = re.sub(r'APP_ID\s*=\s*\d+', 'APP_ID = ' + os.environ['TG_API_ID'], c)
+          c = re.sub(r'APP_HASH\s*=\s*\"[^\"]*\"', 'APP_HASH = \"' + os.environ['TG_API_HASH'] + '\"', c)
+          with open(p, 'w', encoding='utf-8') as f: f.write(c)
+          "
+          
+          # Меняем имя пакета
           sed -i "s/^APP_PACKAGE=.*/APP_PACKAGE=${APP_PACKAGE}/" gradle.properties
-          grep -q "^APP_PACKAGE=${APP_PACKAGE}\$" gradle.properties || { echo "Не нашёл APP_PACKAGE в gradle.properties"; exit 1; }
-          find . -name google-services.json -not -path "*/build/*" -exec sed -i -E "s/(\"package_name\"[[:space:]]*:[[:space:]]*\")org\.telegram\.messenger(\")/\1${APP_PACKAGE}\2/" {} +
+          
+          # Меняем имя пакета в google-services.json
+          find . -name google-services.json -not -path "*/build/*" -exec sed -i -E "s/(\"package_name\"[[:space:]]*:[[:space:]]*\")([^\"]+)(\")/\1${APP_PACKAGE}\3/" {} +
 
       - name: Build
         env:
