@@ -1,0 +1,68 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      abi:
+        description: "Архитектура телефона"
+        type: choice
+        options:
+          - arm64-v8a
+          - armeabi-v7a
+          - all
+        default: arm64-v8a
+
+env:
+  APP_PACKAGE: com.myfork.gram
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK parts
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Put in my keys and package name
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: |
+          set -e
+          [ -n "$TG_API_ID" ] && [ -n "$TG_API_HASH" ] || { echo "Нет секретов TG_API_ID / TG_API_HASH"; exit 1; }
+          B=TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+          sed -i -E "s/(int APP_ID = )[0-9]+;/\1${TG_API_ID};/; s/(String APP_HASH = \")[0-9a-fA-F]+\";/\1${TG_API_HASH}\";/" "$B"
+          grep -q "APP_ID = ${TG_API_ID};" "$B" || { echo "Не нашёл APP_ID в BuildVars.java"; exit 1; }
+          grep -q "APP_HASH = \"${TG_API_HASH}\";" "$B" || { echo "Не нашёл APP_HASH в BuildVars.java"; exit 1; }
+          sed -i "s/^APP_PACKAGE=.*/APP_PACKAGE=${APP_PACKAGE}/" gradle.properties
+          grep -q "^APP_PACKAGE=${APP_PACKAGE}\$" gradle.properties || { echo "Не нашёл APP_PACKAGE в gradle.properties"; exit 1; }
+          find . -name google-services.json -not -path "*/build/*" -exec sed -i -E "s/(\"package_name\"[[:space:]]*:[[:space:]]*\")org\.telegram\.messenger(\")/\1${APP_PACKAGE}\2/" {} +
+
+      - name: Build
+        env:
+          ABI: ${{ inputs.abi }}
+        run: |
+          EXTRA=""
+          if [ "$ABI" != "all" ]; then EXTRA="-Pandroid.injected.build.abi=$ABI"; fi
+          chmod +x gradlew
+          ./gradlew --no-daemon $EXTRA :TMessagesProj_App:assembleAfatRelease --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: TMessagesProj_App/build/outputs/apk/**/*.apk
+          retention-days: 5
