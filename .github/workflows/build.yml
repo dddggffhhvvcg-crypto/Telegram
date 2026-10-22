@@ -20,65 +20,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Init submodules
-        run: |
-          git submodule init
-          git submodule update --init --recursive
-
-      - name: Free disk space
-        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
-
-      - uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: "17"
+          submodules: recursive
+          fetch-depth: 0
 
-      - name: Install Android SDK parts
+      - name: Set up Docker
         run: |
-          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKM" --licenses > /dev/null || true
-          "$SDKM" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+          docker build -t telegram-build .
 
-      - name: Put in my keys and package name
+      - name: Run Docker Build
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
-        run: |
-          set -e
-          [ -n "$TG_API_ID" ] && [ -n "$TG_API_HASH" ] || { echo "Нет секретов TG_API_ID / TG_API_HASH"; exit 1; }
-          
-          # Ищем файл BuildVars.java
-          B=$(find . -name "BuildVars.java" | head -n 1)
-          [ -z "$B" ] && { echo "Не найден BuildVars.java"; exit 1; }
-          
-          # Меняем ключи через Python (он надежнее, чем sed)
-          python3 -c "
-          import re, os
-          p = '$B'
-          with open(p, 'r', encoding='utf-8') as f: c = f.read()
-          c = re.sub(r'APP_ID\s*=\s*\d+', 'APP_ID = ' + os.environ['TG_API_ID'], c)
-          c = re.sub(r'APP_HASH\s*=\s*\"[^\"]*\"', 'APP_HASH = \"' + os.environ['TG_API_HASH'] + '\"', c)
-          with open(p, 'w', encoding='utf-8') as f: f.write(c)
-          "
-          
-          # Меняем имя пакета
-          sed -i "s/^APP_PACKAGE=.*/APP_PACKAGE=${APP_PACKAGE}/" gradle.properties
-          
-          # Меняем имя пакета в google-services.json
-          find . -name google-services.json -not -path "*/build/*" -exec sed -i -E "s/(\"package_name\"[[:space:]]*:[[:space:]]*\")([^\"]+)(\")/\1${APP_PACKAGE}\3/" {} +
-
-      - name: Build
-        env:
           ABI: ${{ inputs.abi }}
         run: |
-          EXTRA=""
-          if [ "$ABI" != "all" ]; then EXTRA="-Pandroid.injected.build.abi=$ABI"; fi
-          chmod +x gradlew
-          ./gradlew --no-daemon $EXTRA :TMessagesProj_App:assembleAfatRelease --stacktrace
+          docker run --rm \
+            -e TG_API_ID="$TG_API_ID" \
+            -e TG_API_HASH="$TG_API_HASH" \
+            -e APP_PACKAGE="$APP_PACKAGE" \
+            -e ABI="$ABI" \
+            -v "$PWD":/home/source \
+            telegram-build
 
       - uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: TMessagesProj_App/build/outputs/apk/**/*.apk
+          path: TMessagesProj/build/outputs/apk/**/*.apk
           retention-days: 5
